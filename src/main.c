@@ -54,13 +54,6 @@ int main(int argc, char *argv[])
 
     mqd_t mq;                   // message queue
     
-    // Create the message queue with some default settings.
-    mq = mq_open(qname, O_RDONLY | O_NONBLOCK, 0700, &ma);
-
-    if (mq == -1) {
-      perror("Failed to open input queue\n");
-      return 1; 
-    }
 
     // Open socket
     int fd;
@@ -70,8 +63,9 @@ int main(int argc, char *argv[])
     }
         
     struct sockaddr_in addr = {0};
-    addr.sin_port = htons(port);
     addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    
     
     if (inet_aton(host, &addr.sin_addr) == 0) 
     {
@@ -79,12 +73,17 @@ int main(int argc, char *argv[])
         return 1;
     }
     
+    
     if(transmit)
-    {
-      if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { 
-        perror("Failed to bind socket");
-        return 1;
+    {    
+      // Create the message queue with some default settings.
+      mq = mq_open(qname, O_RDONLY | O_NONBLOCK, 0700, &ma);
+
+      if (mq == -1) {
+        perror("Failed to open input queue\n");
+        return 1; 
       }
+      
       
       // Read from queue
       while (1) {
@@ -98,8 +97,54 @@ int main(int argc, char *argv[])
               }
           }
       }
+    } else { // Receiving
+      
+      if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { 
+        perror("Failed to bind socket");
+        return 1;
+      }
+      
+      // Create the message queue with some default settings.
+      mq = mq_open(qname, O_RDWR | O_CREAT | O_NONBLOCK, 0664, &ma);
 
-    }
+      if (mq == -1) {
+        perror("Failed to open input queue\n");
+        return 1; 
+      }
+      
+      while (1) {
+        // Clear buffer
+        memset(buffer, 0, msg_size);
+        int slen = 0, rlen = 0;
+        
+        // Wait for message
+        if ((rlen = recvfrom(fd, buffer, msg_size, 0, (struct sockaddr *) &addr, &slen)) == -1)
+        {
+          perror("Failed to receive\n");
+          return 1;
+        }
+        
+        // Check size first
+        struct mq_attr attr;
+        int i = mq_getattr(mq, &attr);
     
+        // If message buffer is full, pop a message
+        char buffer2[msg_size];
+        if (attr.mq_curmsgs>=attr.mq_maxmsg) 
+        {
+            mq_receive(mq, (char *)buffer2, attr.mq_msgsize, 0);
+        }
+        
+        // Send new message
+        if(mq_send(mq, (const char *)buffer, msg_size, 0) == -1)
+        {
+          perror("Failed to send to queue\n");
+          return 1;
+        }
+      }
+      
+      // Read from socket
+    }
+        
     return 0;
 }
